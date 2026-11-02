@@ -34,8 +34,12 @@ jobs:
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           EOF
-          curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew -o gradlew
+          curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew \
+            -o gradlew
           chmod +x gradlew
+          curl -sL "https://github.com/gradle/gradle/raw/v8.4.0/gradle/wrapper/gradle-wrapper.jar" \
+            -o gradle/wrapper/gradle-wrapper.jar
+          ls -lh gradle/wrapper/
 
       - name: Copy patch assets
         run: |
