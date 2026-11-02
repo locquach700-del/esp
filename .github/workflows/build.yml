@@ -1,0 +1,84 @@
+name: Build ESP APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Copy patch assets
+        run: |
+          mkdir -p app/src/main/assets
+          # copy leomodzdev_esp.dat và localConfig.json vào assets
+          cp leomodzdev_esp.dat app/src/main/assets/
+          cp localConfig.json  app/src/main/assets/
+          echo "assets copied"
+
+      - name: Generate launcher icon
+        run: |
+          mkdir -p app/src/main/res/mipmap-hdpi
+          python3 -c "
+          # tạo icon đơn giản bằng PNG header
+          import struct, zlib
+
+          def make_png(size, color):
+              def chunk(t, d):
+                  c = zlib.crc32(t+d) & 0xffffffff
+                  return struct.pack('>I',len(d)) + t + d + struct.pack('>I',c)
+              sig = b'\x89PNG\r\n\x1a\n'
+              ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB',size,size,8,2,0,0,0))
+              r,g,b = color
+              row = b'\x00' + bytes([r,g,b]*size)
+              raw = row * size
+              idat = chunk(b'IDAT', zlib.compress(raw))
+              iend = chunk(b'IEND', b'')
+              return sig + ihdr + idat + iend
+
+          with open('app/src/main/res/mipmap-hdpi/ic_launcher.png','wb') as f:
+              f.write(make_png(72, (21,101,192)))
+          print('icon created')
+          "
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Sign APK
+        run: |
+          keytool -genkey -v \
+            -keystore sign.keystore -alias app \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass esp1234 -keypass esp1234 \
+            -dname "CN=ESP,OU=ESP,O=ESP,L=HN,S=HN,C=VN"
+
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+            --ks sign.keystore \
+            --ks-pass pass:esp1234 \
+            --key-pass pass:esp1234 \
+            --ks-key-alias app \
+            --out ESP_FF_SIGNED.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+
+          echo "size: $(ls -lh ESP_FF_SIGNED.apk)"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ESP_FF_APK
+          path: ESP_FF_SIGNED.apk
+          retention-days: 7
