@@ -18,12 +18,34 @@ jobs:
           distribution: 'temurin'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          # dùng SDK có sẵn trên runner
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "$ANDROID_HOME/build-tools/34.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          # install platform 34 nếu chưa có
+          yes | sdkmanager "platforms;android-34" "build-tools;34.0.0" 2>/dev/null || true
+          ls $ANDROID_HOME/build-tools/
+
+      - name: Setup Gradle wrapper
+        run: |
+          gradle wrapper --gradle-version 8.4 2>/dev/null || \
+          wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O /tmp/gradle.zip
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << 'EOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          EOF
+          wget -q https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew -O gradlew || \
+          curl -sL https://raw.githubusercontent.com/gradle/gradle/v8.4.0/gradlew -o gradlew
+          chmod +x gradlew
 
       - name: Copy patch assets
         run: |
           mkdir -p app/src/main/assets
-          # copy leomodzdev_esp.dat và localConfig.json vào assets
           cp leomodzdev_esp.dat app/src/main/assets/
           cp localConfig.json  app/src/main/assets/
           echo "assets copied"
@@ -32,9 +54,7 @@ jobs:
         run: |
           mkdir -p app/src/main/res/mipmap-hdpi
           python3 -c "
-          # tạo icon đơn giản bằng PNG header
           import struct, zlib
-
           def make_png(size, color):
               def chunk(t, d):
                   c = zlib.crc32(t+d) & 0xffffffff
@@ -47,16 +67,16 @@ jobs:
               idat = chunk(b'IDAT', zlib.compress(raw))
               iend = chunk(b'IEND', b'')
               return sig + ihdr + idat + iend
-
           with open('app/src/main/res/mipmap-hdpi/ic_launcher.png','wb') as f:
               f.write(make_png(72, (21,101,192)))
-          print('icon created')
+          print('icon ok')
           "
 
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          ls -lh app/build/outputs/apk/release/
 
       - name: Sign APK
         run: |
@@ -66,7 +86,7 @@ jobs:
             -storepass esp1234 -keypass esp1234 \
             -dname "CN=ESP,OU=ESP,O=ESP,L=HN,S=HN,C=VN"
 
-          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+          apksigner sign \
             --ks sign.keystore \
             --ks-pass pass:esp1234 \
             --key-pass pass:esp1234 \
@@ -74,7 +94,7 @@ jobs:
             --out ESP_FF_SIGNED.apk \
             app/build/outputs/apk/release/app-release-unsigned.apk
 
-          echo "size: $(ls -lh ESP_FF_SIGNED.apk)"
+          ls -lh ESP_FF_SIGNED.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
