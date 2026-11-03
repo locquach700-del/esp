@@ -41,36 +41,61 @@ public class MainActivity extends Activity {
     }
 
     void doInject() {
-        // copy patch files vào FF data dir qua Shizuku/shell
+        tvStatus.setText("Injecting...");
         new Thread(() -> {
             try {
-                copyPatchFiles();
+                // step 1: copy assets vào app private dir (không cần permission)
+                File privateDir = getFilesDir();
+                File patchFile  = new File(privateDir, "Assembly-CSharp-patch.bytes");
+                File configFile = new File(privateDir, "localConfig.json");
+
+                copyAssetToFile("leomodzdev_esp.dat", patchFile);
+                copyAssetToFile("localConfig.json",   configFile);
+
+                // step 2: dùng shell để move sang FF dir
+                String ffDir = "/sdcard/Android/data/com.dts.freefiremax/files/il2cpp/Managed";
+                String[] cmds = {
+                    "mkdir -p " + ffDir,
+                    "cp " + patchFile.getAbsolutePath() + " " + ffDir + "/Assembly-CSharp-patch.bytes",
+                    "cp " + configFile.getAbsolutePath() + " " + ffDir + "/localConfig.json",
+                    "chmod 777 " + ffDir + "/Assembly-CSharp-patch.bytes",
+                    "chmod 777 " + ffDir + "/localConfig.json",
+                };
+
+                StringBuilder log = new StringBuilder();
+                boolean ok = true;
+                for (String cmd : cmds) {
+                    Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+                    p.waitFor();
+                    int code = p.exitValue();
+                    log.append(cmd.substring(0, Math.min(30, cmd.length()))).append(" → ").append(code).append("\n");
+                    if (code != 0) ok = false;
+                }
+
+                boolean success = ok;
+                String logStr = log.toString();
+
                 runOnUiThread(() -> {
-                    startService(new Intent(this, FloatMenuService.class));
-                    tvStatus.setText("Injected! Open FF Max now.");
+                    if (success) {
+                        tvStatus.setText("Injected! Open FF Max now.");
+                        startService(new Intent(this, FloatMenuService.class));
+                    } else {
+                        // shell fail — thử Shizuku path
+                        tvStatus.setText("Shell failed. Try ZArchiver:\n\n"
+                            + patchFile.getAbsolutePath() + "\n→ copy vào:\n"
+                            + ffDir + "\n\nLog:\n" + logStr);
+                    }
                 });
+
             } catch (Exception e) {
                 runOnUiThread(() -> tvStatus.setText("Error: " + e.getMessage()));
             }
         }).start();
     }
 
-    void copyPatchFiles() throws Exception {
-        // copy leomodzdev_esp.dat → FF patch path
-        String ffDir = "/storage/emulated/0/Android/data/com.dts.freefiremax/files/il2cpp/Managed/";
-        copyAsset("leomodzdev_esp.dat",
-                  ffDir + "Assembly-CSharp-patch.bytes");
-        copyAsset("localConfig.json",
-                  ffDir + "localConfig.json");
-    }
-
-    void copyAsset(String assetName, String destPath) throws Exception {
-        // tạo dir qua shell
-        new ProcessBuilder("sh", "-c", "mkdir -p " + new File(destPath).getParent())
-            .start().waitFor();
-
+    void copyAssetToFile(String assetName, File dest) throws IOException {
         InputStream in = getAssets().open(assetName);
-        FileOutputStream out = new FileOutputStream(destPath);
+        FileOutputStream out = new FileOutputStream(dest);
         byte[] buf = new byte[4096];
         int n;
         while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
