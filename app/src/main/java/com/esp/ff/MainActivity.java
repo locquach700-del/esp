@@ -65,7 +65,7 @@ public class MainActivity extends Activity {
                 StringBuilder log = new StringBuilder();
                 boolean ok = true;
                 for (String cmd : cmds) {
-                    Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
+                    java.lang.Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
                     p.waitFor();
                     int code = p.exitValue();
                     log.append(cmd.substring(0, Math.min(30, cmd.length()))).append(" → ").append(code).append("\n");
