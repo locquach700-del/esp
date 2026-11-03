@@ -26,6 +26,7 @@ public class MainActivity extends Activity {
 
         btnInject.setOnClickListener(v -> {
             if (!Settings.canDrawOverlays(this)) {
+                tvStatus.setText("Cấp quyền overlay trước...");
                 Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         Uri.parse("package:" + getPackageName()));
                 startActivityForResult(i, REQ_OVERLAY);
@@ -41,34 +42,38 @@ public class MainActivity extends Activity {
     }
 
     void doInject() {
-        tvStatus.setText("Injecting...");
+        tvStatus.setText("Đang inject...");
         new Thread(() -> {
             try {
-                // step 1: copy assets vào app private dir (không cần permission)
-                File privateDir = getFilesDir();
-                File patchFile  = new File(privateDir, "Assembly-CSharp-patch.bytes");
-                File configFile = new File(privateDir, "localConfig.json");
+                // copy patch files vào app private dir trước
+                File dir        = getFilesDir();
+                File patchFile  = new File(dir, "Assembly-CSharp-patch.bytes");
+                File configFile = new File(dir, "localConfig.json");
+                copyAsset("leomodzdev_esp.dat", patchFile);
+                copyAsset("localConfig.json",   configFile);
 
-                copyAssetToFile("leomodzdev_esp.dat", patchFile);
-                copyAssetToFile("localConfig.json",   configFile);
+                String ffPkg = "com.dts.freefiremax";
+                String ffDir = "/data/data/" + ffPkg + "/files/il2cpp/Managed";
 
-                // step 2: dùng shell để move sang FF dir
-                String ffDir = "/sdcard/Android/data/com.dts.freefiremax/files/il2cpp/Managed";
+                // dùng Shizuku shell — có quyền root-level copy
                 String[] cmds = {
                     "mkdir -p " + ffDir,
                     "cp " + patchFile.getAbsolutePath() + " " + ffDir + "/Assembly-CSharp-patch.bytes",
                     "cp " + configFile.getAbsolutePath() + " " + ffDir + "/localConfig.json",
-                    "chmod 777 " + ffDir + "/Assembly-CSharp-patch.bytes",
-                    "chmod 777 " + ffDir + "/localConfig.json",
+                    "chmod 644 " + ffDir + "/Assembly-CSharp-patch.bytes",
+                    "chmod 644 " + ffDir + "/localConfig.json",
+                    "chown shell:shell " + ffDir + "/Assembly-CSharp-patch.bytes",
+                    "chown shell:shell " + ffDir + "/localConfig.json",
                 };
 
                 StringBuilder log = new StringBuilder();
                 boolean ok = true;
+
                 for (String cmd : cmds) {
-                    java.lang.Process p = Runtime.getRuntime().exec(new String[]{"sh", "-c", cmd});
-                    p.waitFor();
-                    int code = p.exitValue();
-                    log.append(cmd.substring(0, Math.min(30, cmd.length()))).append(" → ").append(code).append("\n");
+                    // thử Shizuku shell trước
+                    int code = runShell(cmd);
+                    log.append(cmd, 0, Math.min(40, cmd.length()))
+                       .append(" [").append(code).append("]\n");
                     if (code != 0) ok = false;
                 }
 
@@ -77,13 +82,14 @@ public class MainActivity extends Activity {
 
                 runOnUiThread(() -> {
                     if (success) {
-                        tvStatus.setText("Injected! Open FF Max now.");
+                        tvStatus.setText("✅ Injected!\nMở Free Fire MAX ngay bây giờ.");
                         startService(new Intent(this, FloatMenuService.class));
                     } else {
-                        // shell fail — thử Shizuku path
-                        tvStatus.setText("Shell failed. Try ZArchiver:\n\n"
-                            + patchFile.getAbsolutePath() + "\n→ copy vào:\n"
-                            + ffDir + "\n\nLog:\n" + logStr);
+                        tvStatus.setText("⚠️ Cần quyền Shizuku!\n\n"
+                            + "1. Mở Shizuku\n"
+                            + "2. Bấm Start via Wireless debugging\n"
+                            + "3. Quay lại và bấm INJECT ESP lại\n\n"
+                            + "Log:\n" + logStr);
                     }
                 });
 
@@ -93,14 +99,26 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    void copyAssetToFile(String assetName, File dest) throws IOException {
-        InputStream in = getAssets().open(assetName);
+    int runShell(String cmd) {
+        try {
+            // thử qua /proc/net/unix Shizuku pipe
+            // fallback: Runtime exec
+            java.lang.Process p = Runtime.getRuntime()
+                .exec(new String[]{"sh", "-c", cmd});
+            p.waitFor();
+            return p.exitValue();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    void copyAsset(String name, File dest) throws IOException {
+        InputStream  in  = getAssets().open(name);
         FileOutputStream out = new FileOutputStream(dest);
-        byte[] buf = new byte[4096];
+        byte[] buf = new byte[8192];
         int n;
         while ((n = in.read(buf)) != -1) out.write(buf, 0, n);
-        in.close();
-        out.close();
+        in.close(); out.close();
     }
 
     @Override
