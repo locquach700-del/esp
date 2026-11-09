@@ -1,0 +1,123 @@
+name: Sign APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: 'URL của APK cần ký (direct download link)'
+        required: false
+        default: ''
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── Lấy APK ──────────────────────────────────────────────────────────
+      - name: Download APK từ URL (nếu có)
+        if: ${{ github.event.inputs.apk_url != '' }}
+        run: |
+          curl -L "${{ github.event.inputs.apk_url }}" -o input.apk
+          echo "APK downloaded: $(du -sh input.apk)"
+
+      - name: Dùng APK đã upload vào repo (nếu không có URL)
+        if: ${{ github.event.inputs.apk_url == '' }}
+        run: |
+          # Đặt file APK vào thư mục gốc repo với tên input.apk
+          # hoặc thay đường dẫn bên dưới cho đúng
+          if [ ! -f input.apk ]; then
+            APK=$(find . -maxdepth 2 -name "*.apk" | head -1)
+            if [ -z "$APK" ]; then
+              echo "ERROR: Không tìm thấy APK. Upload file .apk vào repo hoặc điền apk_url."
+              exit 1
+            fi
+            cp "$APK" input.apk
+            echo "Dùng APK: $APK"
+          fi
+
+      # ── Tạo keystore ─────────────────────────────────────────────────────
+      - name: Tạo keystore
+        run: |
+          keytool -genkeypair \
+            -keystore release.keystore \
+            -alias release_key \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -storepass android123 \
+            -keypass android123 \
+            -dname "CN=Release,OU=Dev,O=Build,L=VN,ST=VN,C=VN" \
+            -noprompt
+          echo "Keystore created"
+
+      # ── Zipalign ─────────────────────────────────────────────────────────
+      - name: Install build tools
+        run: |
+          sudo apt-get install -y zipalign apksigner 2>/dev/null || true
+          # fallback nếu apt không có
+          if ! command -v zipalign &>/dev/null; then
+            # dùng Android SDK build tools
+            BTOOLS="$ANDROID_HOME/build-tools"
+            LATEST=$(ls "$BTOOLS" | sort -V | tail -1)
+            export PATH="$BTOOLS/$LATEST:$PATH"
+            echo "PATH=$BTOOLS/$LATEST:$PATH" >> $GITHUB_ENV
+          fi
+          zipalign --version 2>&1 || echo "zipalign not found, skipping align step"
+
+      - name: Zipalign APK
+        run: |
+          if command -v zipalign &>/dev/null; then
+            zipalign -v -p 4 input.apk aligned.apk
+            echo "Aligned OK"
+          else
+            cp input.apk aligned.apk
+            echo "zipalign skipped"
+          fi
+
+      # ── Ký APK ───────────────────────────────────────────────────────────
+      - name: Ký APK bằng apksigner (v2/v3)
+        run: |
+          if command -v apksigner &>/dev/null; then
+            apksigner sign \
+              --ks release.keystore \
+              --ks-key-alias release_key \
+              --ks-pass pass:android123 \
+              --key-pass pass:android123 \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --out signed.apk \
+              aligned.apk
+            echo "Signed with apksigner (v1+v2+v3)"
+          else
+            # fallback: jarsigner (v1 only)
+            jarsigner \
+              -keystore release.keystore \
+              -storepass android123 \
+              -keypass android123 \
+              -sigalg SHA256withRSA \
+              -digestalg SHA-256 \
+              -signedjar signed.apk \
+              aligned.apk \
+              release_key
+            echo "Signed with jarsigner (v1)"
+          fi
+
+      # ── Verify ───────────────────────────────────────────────────────────
+      - name: Verify signature
+        run: |
+          if command -v apksigner &>/dev/null; then
+            apksigner verify --verbose signed.apk 2>&1 | head -20
+          fi
+          echo "APK size: $(du -sh signed.apk)"
+
+      # ── Upload artifact ──────────────────────────────────────────────────
+      - name: Upload signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-apk
+          path: signed.apk
+          retention-days: 7
